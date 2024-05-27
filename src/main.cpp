@@ -109,9 +109,9 @@ Perhaps<Token> Lexer::lex() {
 		case '\t':
 		case '\n':
 		case ' ': return lex();
+		case EOF: return {};
 		default: {
 			std::string sym = "";
-			if (c == EOF) return Perhaps<Token>();
 			if (!is_reserved(c)) sym += c;
 			Perhaps<char> per;
 			while (((per = m_ring.peek()), true) && per.is_some()
@@ -145,7 +145,7 @@ struct AST {
 			SYM,
 			QUOTE,
 			QUASI,
-			EVAL,
+			UNQUOTE,
 		};
 		Type type;
 
@@ -179,6 +179,11 @@ struct AST {
 			else
 				children.~vector<Node>();
 		}
+
+		Node& operator+=(const Node& other) {
+			children.push_back(other);
+			return *this;
+		}
 	};
 
 	Perhaps<Node> root;
@@ -198,7 +203,7 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 		case AST::Node::Type::SYM: st << node.sym; break;
 		case AST::Node::Type::QUOTE: st << '\'' << node.children[0]; break;
 		case AST::Node::Type::QUASI: st << '`' << node.children[0]; break;
-		case AST::Node::Type::EVAL: st << ',' << node.children[0]; break;
+		case AST::Node::Type::UNQUOTE: st << ',' << node.children[0]; break;
 	}
 	return st;
 }
@@ -215,13 +220,34 @@ struct Parser {
 	AST parse();
 
  private:
-	Perhaps<AST::Node> parse_node();
+	Perhaps<AST::Node> parse_program();
+	Perhaps<AST::Node> parse_exp();
+	Perhaps<AST::Node> parse_list();
+	Perhaps<AST::Node> parse_symbol();
+	Perhaps<AST::Node> parse_quote();
+	Perhaps<AST::Node> parse_quasi();
+	Perhaps<AST::Node> parse_unquote();
+
 	void ensure();
 	bool match(Token::Type);
+	Perhaps<Token> peek();
+	Perhaps<Token> advance();
+
 	Ring<Token> m_ring;
 };
 
+Perhaps<Token> Parser::peek() {
+	ensure();
+	return m_ring.peek();
+}
+
+Perhaps<Token> Parser::advance() {
+	ensure();
+	return m_ring.read();
+}
+
 bool Parser::match(Token::Type type) {
+	ensure();
 	auto per_tk = m_ring.peek();
 	if (per_tk.is_none()) return false;
 	auto tk = per_tk.unwrap();
@@ -241,57 +267,82 @@ void Parser::ensure() {
 
 AST Parser::parse() {
 	AST ast;
-	Perhaps<AST::Node> res = parse_node();
+	Perhaps<AST::Node> res = parse_program();
 	ast.root = res;
 	return ast;
 }
 
-Perhaps<AST::Node> Parser::parse_node() {
-	ensure();
-	auto per = m_ring.peek();
-	if (per.is_none()) return {};
-	Token tk = per.unwrap();
-	switch (tk.type) {
-		case Token::Type::PAREN_OPEN: {
-			m_ring.read();
-			AST::Node res(AST::Node::Type::CONS);
-			while (true) {
-				auto child = parse_node();
-				if (child.is_none()) break;
-				res.children.push_back(child.unwrap());
-			}
-			if (!match(Token::Type::PAREN_CLOSE)) return {};
-			return res;
-		}
-		case Token::Type::PAREN_CLOSE: return {};
-		case Token::Type::COMMA: {
-			m_ring.read();
-			AST::Node res(AST::Node::Type::EVAL);
-			auto list = parse_node();
-			if (list.is_some()) res.children.push_back(list.unwrap());
-			return res;
-		}
-		case Token::Type::GRAVE: {
-			m_ring.read();
-			AST::Node res(AST::Node::Type::QUASI);
-			auto list = parse_node();
-			if (list.is_some()) res.children.push_back(list.unwrap());
-			return res;
-		}
-		case Token::Type::QUOTE: {
-			m_ring.read();
-			AST::Node res(AST::Node::Type::QUOTE);
-			auto list = parse_node();
-			if (list.is_some()) res.children.push_back(list.unwrap());
-			return res;
-		}
-		case Token::Type::SYM: {
-			m_ring.read();
-			AST::Node res(tk.sym);
-			return res;
-		}
-	}
+// quote = "'" exp
+Perhaps<AST::Node> Parser::parse_quote() {
+	if (!match(Token::Type::QUOTE)) return {};
+	AST::Node quote(AST::Node::Type::QUOTE);
+	auto exp = parse_exp();
+	if (exp.is_some()) quote += exp.unwrap();
+	return quote;
 }
+
+// quasi = "`" exp
+Perhaps<AST::Node> Parser::parse_quasi() {
+	if (!match(Token::Type::GRAVE)) return {};
+	AST::Node quasi(AST::Node::Type::QUASI);
+	auto exp = parse_exp();
+	if (exp.is_some()) quasi += exp.unwrap();
+	return quasi;
+}
+
+// unquote = "," exp
+Perhaps<AST::Node> Parser::parse_unquote() {
+	if (!match(Token::Type::COMMA)) return {};
+	AST::Node unquote(AST::Node::Type::UNQUOTE);
+	auto exp = parse_exp();
+	if (exp.is_some()) unquote += exp.unwrap();
+	return unquote;
+}
+
+// symbol = SYM
+Perhaps<AST::Node> Parser::parse_symbol() {
+	auto per_sym = peek();
+	if (per_sym.is_none()) return {};
+	auto sym = per_sym.unwrap();
+	if (sym.type != Token::Type::SYM) return {};
+	advance();
+	return AST::Node(sym.sym);
+}
+
+// list = "(" exp* ")"
+Perhaps<AST::Node> Parser::parse_list() {
+	if (!match(Token::Type::PAREN_OPEN)) return {};
+
+	AST::Node list(AST::Node::Type::CONS);
+	while (true) {
+		auto child = parse_exp();
+		if (child.is_none()) break;
+		list += child.unwrap();
+	}
+
+	if (!match(Token::Type::PAREN_CLOSE)) return {};
+	return list;
+}
+
+// exp = list | symbol | quote | quasi | unquote
+Perhaps<AST::Node> Parser::parse_exp() {
+	auto list = parse_list();
+	if (list.is_some()) return list;
+	auto symbol = parse_symbol();
+	if (symbol.is_some()) return symbol;
+	auto quote = parse_quote();
+	if (quote.is_some()) return quote;
+	auto quasi = parse_quasi();
+	if (quasi.is_some()) return quasi;
+	auto unquote = parse_unquote();
+	if (unquote.is_some()) return unquote;
+	auto _int = parse_int();
+	if (_int.is_some()) return _int;
+	return {};
+}
+
+// program = exp
+Perhaps<AST::Node> Parser::parse_program() { return parse_exp(); }
 
 int main(int argc, char* argv[]) {
 	File file = (argv[1][0] == '-') ? stdin : File(fopen(argv[1], "r"));
