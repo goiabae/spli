@@ -222,9 +222,11 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 	switch (node.type) {
 		case AST::Node::Type::CONS: {
 			st << '(';
-			for (size_t i = 0; i < node.children.size() - 1; i++)
-				st << node.children[i] << ' ';
-			st << node.children[node.children.size() - 1];
+			if (node.children.size() > 0) {
+				for (size_t i = 0; i < node.children.size() - 1; i++)
+					st << node.children[i] << ' ';
+				st << node.children[node.children.size() - 1];
+			}
 			st << ')';
 			break;
 		}
