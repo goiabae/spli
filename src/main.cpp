@@ -131,9 +131,9 @@ Perhaps<Token> Lexer::lex() {
 				}
 			}
 			if (!is_reserved(c)) sym += c;
-			Perhaps<char> per;
-			while (((per = m_ring.peek()), true) && per.is_some()
-			       && !is_reserved(per.unwrap())) {
+			for (Perhaps<char> per = m_ring.peek();
+			     per.is_some() && !is_reserved(per.unwrap());
+			     per = m_ring.peek()) {
 				m_ring.read();
 				sym += per.unwrap();
 			}
@@ -144,11 +144,10 @@ Perhaps<Token> Lexer::lex() {
 }
 
 void Lexer::ensure() {
-	if (m_ring.len() != 0) return;
+	if (!m_ring.is_empty()) return;
 	char c;
-	while (m_ring.len() < m_ring.cap()
-	       && ((c = fgetc(file.get_descriptor())), true) && c != EOF
-	       && c != '\n') {
+	while (!m_ring.is_full() && ((c = fgetc(file.get_descriptor())), true)
+	       && c != EOF && c != '\n') {
 		m_ring.write(c);
 	}
 }
@@ -289,12 +288,10 @@ bool Parser::match(Token::Type type) {
 }
 
 void Parser::ensure() {
-	if (m_ring.len() != 0) return;
-	Perhaps<Token> per;
-	while (m_ring.len() < m_ring.cap() && ((per = lexer.lex()), true)
-	       && per.is_some()) {
+	if (!m_ring.is_empty()) return;
+	for (auto per = lexer.lex(); !m_ring.is_full() && per.is_some();
+	     per = lexer.lex())
 		m_ring.write(per.unwrap());
-	}
 }
 
 AST Parser::parse() {
