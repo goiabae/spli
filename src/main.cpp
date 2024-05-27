@@ -294,6 +294,13 @@ void Parser::ensure() {
 		m_ring.write(per.unwrap());
 }
 
+Perhaps<AST::Node> operator||(
+	Perhaps<AST::Node>&& lhs, Perhaps<AST::Node>&& rhs
+) {
+	if (lhs.is_some()) return std::move(lhs);
+	return std::move(rhs);
+}
+
 AST Parser::parse() {
 	AST ast;
 	Perhaps<AST::Node> res = parse_program();
@@ -366,19 +373,8 @@ Perhaps<AST::Node> Parser::parse_int() {
 
 // exp = list | symbol | quote | quasi | unquote | int
 Perhaps<AST::Node> Parser::parse_exp() {
-	auto list = parse_list();
-	if (list.is_some()) return list;
-	auto symbol = parse_symbol();
-	if (symbol.is_some()) return symbol;
-	auto quote = parse_quote();
-	if (quote.is_some()) return quote;
-	auto quasi = parse_quasi();
-	if (quasi.is_some()) return quasi;
-	auto unquote = parse_unquote();
-	if (unquote.is_some()) return unquote;
-	auto _int = parse_int();
-	if (_int.is_some()) return _int;
-	return {};
+	return parse_list() || parse_symbol() || parse_quote() || parse_quasi()
+	    || parse_unquote() || parse_int() || parse_str();
 }
 
 // program = exp
