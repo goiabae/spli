@@ -1,10 +1,11 @@
-#include <ctype.h>
-#include <stdio.h>
-
-#include <algorithm>
+#include <cassert>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define RING_IMPL
@@ -14,25 +15,30 @@
 #include "perhaps.hpp"
 
 using std::cout;
-using std::endl;
 using std::string;
 using std::vector;
 
 struct File {
 	File(const char* path, const char* mode) : m_fd {fopen(path, mode)} {}
-	File(FILE* fd) : m_fd {fd}, m_owned {false} {}
+	File(FILE* fd) : m_owned {false}, m_fd {fd} {}
+
+	File(const File& other) = default;
+	File(File&& other) = default;
+	File& operator=(const File& other) = default;
+	File& operator=(File&& other) = default;
 	~File() {
-		if (m_owned) fclose(m_fd);
+		if (m_owned) (void)fclose(m_fd); // FIXME: handle fclose return value
 	}
 
-	bool operator!() { return !m_fd; }
+	bool operator!() { return m_fd == nullptr; }
 
 	FILE* get_descriptor() { return m_fd; }
-	bool at_eof() { return feof(m_fd); }
+	bool at_eof() { return feof(m_fd) != 0; }
+	char getc() { return static_cast<char>(fgetc(m_fd)); }
 
  private:
-	FILE* m_fd;
 	bool m_owned {true};
+	FILE* m_fd;
 };
 
 struct Token {
@@ -43,60 +49,70 @@ struct Token {
 		COMMA,
 		GRAVE,
 		SYM,
+		STR,
 		INT,
 	};
 
-	Type type;
-	std::string sym {""};
+	Token() : m_type(Type::GRAVE) {} // FIXME: set this to something else
+	Token(Type type) : m_type(type) {}
+	Token(Type type, string sym) : m_type(type), m_str(std::move(sym)) {}
 
-	Token() {}
-	Token(Type type) : type(type) {}
-	Token(Type type, const string& sym) : type(type), sym(sym) {}
-
-	bool operator==(Token other) {
-		return type == other.type && sym == other.sym;
+	bool operator==(const Token& other) {
+		return m_type == other.m_type && m_str == other.m_str;
 	}
+
+	Type type() { return m_type; }
+	const string& sym() { return m_str; }
+
+ private:
+	Type m_type;
+	std::string m_str {};
 };
 
 struct Lexer {
 	struct Iterator {
-		Perhaps<Token> per;
-		Lexer* lexer;
 		Iterator(Lexer* lexer) : lexer {lexer} { per = lexer->lex(); }
-		Iterator() { per = Perhaps<Token>(); }
+		Iterator() : lexer(nullptr) { per = Perhaps<Token>(); }
 		bool operator!=(Iterator& other) { return !(per == other.per); }
 		Iterator operator++() {
 			per = lexer->lex();
 			return *this;
 		}
 		Token operator*() { return per.unwrap(); }
+
+	 private:
+		Perhaps<Token> per;
+		Lexer* lexer;
 	};
 
-	Iterator begin() { return Iterator(this); }
-	Iterator end() { return Iterator(); }
+	Iterator begin() { return this; }
+	static Iterator end() { return {}; }
 
 	Lexer(File& file) : file {file} {}
 
 	Perhaps<Token> lex();
 
  private:
-	File& file;
+	File file;
 	Ring<char> m_ring;
 
-	bool is_reserved(char c) { return isspace(c) || c == '(' || c == ')'; }
+	static bool is_reserved(char c) {
+		return isspace(c) != 0 || c == '(' || c == ')';
+	}
 
 	void ensure();
 };
 
 std::ostream& operator<<(std::ostream& st, Token& tk) {
-	switch (tk.type) {
+	switch (tk.type()) {
 		case Token::Type::PAREN_OPEN: st << '('; break;
 		case Token::Type::PAREN_CLOSE: st << ')'; break;
-		case Token::Type::SYM: st << tk.sym; break;
+		case Token::Type::SYM: st << tk.sym(); break;
 		case Token::Type::COMMA: st << ','; break;
 		case Token::Type::GRAVE: st << '`'; break;
 		case Token::Type::QUOTE: st << '\''; break;
-		case Token::Type::INT: st << tk.sym; break;
+		case Token::Type::INT: st << tk.sym(); break;
+		case Token::Type::STR: st << '"' << tk.sym() << '"'; break;
 	}
 	return st;
 }
@@ -114,22 +130,47 @@ Perhaps<Token> Lexer::lex() {
 		case ',': return Token {Token::Type::COMMA};
 		case '\t':
 		case '\n':
+		case '"': {
+			std::string str;
+			per = m_ring.peek();
+			while (per.is_some()) {
+				c = per.unwrap();
+				if (c == '"') {
+					m_ring.read();
+					return Token(Token::Type::STR, str);
+				}
+				str += c;
+				m_ring.read();
+				per = m_ring.peek();
+			}
+			return {};
+		}
 		case ' ': return lex();
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9': {
+			std::string sym;
+			sym += c;
+			per = m_ring.peek();
+			while (per.is_some()) {
+				c = per.unwrap();
+				if (isdigit(c) == 0) return Token {Token::Type::INT, sym};
+				sym += c;
+				m_ring.read();
+				per = m_ring.peek();
+			}
+			return {};
+		}
 		case EOF: return {};
 		default: {
-			std::string sym = "";
-			if (isdigit(c)) {
-				sym += c;
-				// m_ring.read();
-				per = m_ring.peek();
-				while (per.is_some()) {
-					c = per.unwrap();
-					if (!isdigit(c)) return Token {Token::Type::INT, sym};
-					sym += c;
-					m_ring.read();
-					per = m_ring.peek();
-				}
-			}
+			std::string sym;
 			if (!is_reserved(c)) sym += c;
 			for (Perhaps<char> per = m_ring.peek();
 			     per.is_some() && !is_reserved(per.unwrap());
@@ -140,14 +181,14 @@ Perhaps<Token> Lexer::lex() {
 			return Token {Token::Type::SYM, sym};
 		}
 	}
-	return Perhaps<Token>();
+	return {};
 }
 
 void Lexer::ensure() {
 	if (!m_ring.is_empty()) return;
-	char c;
-	while (!m_ring.is_full() && ((c = fgetc(file.get_descriptor())), true)
-	       && c != EOF && c != '\n') {
+	char c = EOF;
+	while (!m_ring.is_full() && ((c = file.getc()), true) && c != EOF && c != '\n'
+	) {
 		m_ring.write(c);
 	}
 }
@@ -164,6 +205,7 @@ struct AST {
 			QUASI,
 			UNQUOTE,
 			INT,
+			STR,
 		};
 		Type type;
 
@@ -176,8 +218,9 @@ struct AST {
 		friend std::ostream& operator<<(std::ostream& st, AST::Node& node);
 
 		Node& operator=(const Node& other) {
+			if (this == &other) return *this;
 			type = other.type;
-			if (other.type == Type::SYM)
+			if (other.type == Type::SYM || other.type == Type::STR)
 				new (&sym) std::string(other.sym);
 			else if (type == Type::INT)
 				num = other.num;
@@ -185,20 +228,42 @@ struct AST {
 				new (&children) vector<Node>(other.children);
 			return *this;
 		}
-		Node(const Node& node) : type(node.type) {
-			if (node.type == Type::SYM)
-				new (&sym) std::string(node.sym);
+
+		Node& operator=(Node&& other) noexcept {
+			type = other.type;
+			if (other.type == Type::SYM || other.type == Type::STR)
+				new (&sym) std::string(other.sym);
 			else if (type == Type::INT)
-				num = node.num;
+				num = other.num;
 			else
-				new (&children) vector<Node>(node.children);
+				new (&children) vector<Node>(other.children);
+			return *this;
 		}
-		// Node() : type(Type::INVALID) {}
+
+		Node(const Node& other) : type(other.type) {
+			if (other.type == Type::SYM || other.type == Type::STR)
+				new (&sym) std::string(other.sym);
+			else if (type == Type::INT)
+				num = other.num;
+			else
+				new (&children) vector<Node>(other.children);
+		}
+
+		Node(Node&& other) noexcept : type(other.type) {
+			if (other.type == Type::SYM || other.type == Type::STR)
+				new (&sym) std::string(other.sym);
+			else if (type == Type::INT)
+				num = other.num;
+			else
+				new (&children) vector<Node>(other.children);
+		}
+
 		Node(Type type) : type(type), children() {}
-		Node(Str str) : type(Type::SYM), sym(str) {}
+		Node(Str str) : type(Type::SYM), sym(std::move(str)) {}
 		Node(int num) : type(Type::INT), num(num) {}
+		Node(Type type, Str str) : type(type), sym(std::move(str)) {}
 		~Node() {
-			if (type == Type::SYM)
+			if (type == Type::SYM || type == Type::STR)
 				sym.~Str();
 			else if (type == Type::INT)
 				(void)0;
@@ -221,7 +286,7 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 	switch (node.type) {
 		case AST::Node::Type::CONS: {
 			st << '(';
-			if (node.children.size() > 0) {
+			if (!node.children.empty()) {
 				for (size_t i = 0; i < node.children.size() - 1; i++)
 					st << node.children[i] << ' ';
 				st << node.children[node.children.size() - 1];
@@ -234,6 +299,7 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 		case AST::Node::Type::QUASI: st << '`' << node.children[0]; break;
 		case AST::Node::Type::UNQUOTE: st << ',' << node.children[0]; break;
 		case AST::Node::Type::INT: st << node.num; break;
+		case AST::Node::Type::STR: st << '"' << node.sym << '"'; break;
 	}
 	return st;
 }
@@ -258,9 +324,10 @@ struct Parser {
 	Perhaps<AST::Node> parse_quasi();
 	Perhaps<AST::Node> parse_unquote();
 	Perhaps<AST::Node> parse_int();
+	Perhaps<AST::Node> parse_str();
 
-	void ensure();
-	bool match(Token::Type);
+	void ensure(); // ensure there are tokens in the ring to read from
+	bool match(Token::Type type);
 	Perhaps<Token> peek();
 	Perhaps<Token> advance();
 
@@ -282,7 +349,7 @@ bool Parser::match(Token::Type type) {
 	auto per_tk = m_ring.peek();
 	if (per_tk.is_none()) return false;
 	auto tk = per_tk.unwrap();
-	if (tk.type != type) return false;
+	if (tk.type() != type) return false;
 	m_ring.read();
 	return true;
 }
@@ -303,8 +370,7 @@ Perhaps<AST::Node> operator||(
 
 AST Parser::parse() {
 	AST ast;
-	Perhaps<AST::Node> res = parse_program();
-	ast.root = res;
+	ast.root = parse_program();
 	return ast;
 }
 
@@ -340,9 +406,9 @@ Perhaps<AST::Node> Parser::parse_symbol() {
 	auto per_sym = peek();
 	if (per_sym.is_none()) return {};
 	auto sym = per_sym.unwrap();
-	if (sym.type != Token::Type::SYM) return {};
+	if (sym.type() != Token::Type::SYM) return {};
 	advance();
-	return AST::Node(sym.sym);
+	return AST::Node(sym.sym());
 }
 
 // list = "(" exp* ")"
@@ -365,13 +431,23 @@ Perhaps<AST::Node> Parser::parse_int() {
 	auto per_num = peek();
 	if (per_num.is_none()) return {};
 	auto num = per_num.unwrap();
-	if (num.type != Token::Type::INT) return {};
+	if (num.type() != Token::Type::INT) return {};
 	advance();
-	int res = std::stoi(num.sym);
+	const int res = std::stoi(num.sym());
 	return AST::Node(res);
 }
 
-// exp = list | symbol | quote | quasi | unquote | int
+// str = STR
+Perhaps<AST::Node> Parser::parse_str() {
+	auto per_str = peek();
+	if (per_str.is_none()) return {};
+	auto str = per_str.unwrap();
+	if (str.type() != Token::Type::STR) return {};
+	advance();
+	return AST::Node(AST::Node::Type::STR, str.sym());
+}
+
+// exp = list | symbol | quote | quasi | unquote | int | str
 Perhaps<AST::Node> Parser::parse_exp() {
 	return parse_list() || parse_symbol() || parse_quote() || parse_quasi()
 	    || parse_unquote() || parse_int() || parse_str();
@@ -380,16 +456,17 @@ Perhaps<AST::Node> Parser::parse_exp() {
 // program = exp
 Perhaps<AST::Node> Parser::parse_program() { return parse_exp(); }
 
-void usage() { cout << "Usage:" << endl << "  spli <filepath>" << endl; }
+void usage() { cout << "Usage:" << '\n' << "  spli <filepath>" << '\n'; }
 
 int main(int argc, char* argv[]) {
 	if (argc < 2) {
 		usage();
 		return 1;
 	}
-	File file = (argv[1][0] == '-') ? stdin : File(fopen(argv[1], "r"));
+
+	File file = (argv[1][0] == '-') ? stdin : File(argv[1], "r");
 	Parser parser(file);
 	AST ast = parser.parse();
-	cout << ast << endl;
+	cout << ast << '\n';
 	return 0;
 }

@@ -17,8 +17,8 @@ struct Ring {
 	Perhaps<T> peek() const; // return the next character
 	void write(T item);
 	void write_many(T buf[], size_t len);
-	size_t is_empty() const { return m_len == 0; }
-	size_t is_full() const { return m_len == m_cap; }
+	bool is_empty() const { return m_len == 0; }
+	bool is_full() const { return m_len == m_cap; }
 
  private:
 	T* m_buf;

@@ -109,7 +109,7 @@ bool Perhaps<T>::is_none() {
 
 template<typename T>
 T Perhaps<T>::unwrap() {
-	assert(m_checked);
+	assert(m_checked && m_some);
 	return m_value;
 }
 
