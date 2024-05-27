@@ -381,7 +381,13 @@ Perhaps<AST::Node> Parser::parse_exp() {
 // program = exp
 Perhaps<AST::Node> Parser::parse_program() { return parse_exp(); }
 
+void usage() { cout << "Usage:" << endl << "  spli <filepath>" << endl; }
+
 int main(int argc, char* argv[]) {
+	if (argc < 2) {
+		usage();
+		return 1;
+	}
 	File file = (argv[1][0] == '-') ? stdin : File(fopen(argv[1], "r"));
 	Parser parser(file);
 	AST ast = parser.parse();
