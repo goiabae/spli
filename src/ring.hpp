@@ -13,14 +13,14 @@ struct Ring {
 	Ring();
 	~Ring();
 
-	Perhaps<T> read(); // consume and return the next character
-	Perhaps<T> peek() const ; // return the next character
+	Perhaps<T> read();       // consume and return the next character
+	Perhaps<T> peek() const; // return the next character
 	void write(T item);
 	void write_many(T buf[], size_t len);
 	size_t is_empty() const { return m_len == 0; }
 	size_t is_full() const { return m_len == m_cap; }
 
-private:
+ private:
 	T* m_buf;
 	size_t m_read;
 	size_t m_write;
@@ -30,10 +30,10 @@ private:
 
 #ifdef RING_IMPL
 
-#include <assert.h>
+#	include <assert.h>
 
 // arbitrary choice
-#define RING_DEFAULT_CAP 1024
+#	define RING_DEFAULT_CAP 1024
 
 template<typename T>
 Ring<T>::Ring() {
@@ -45,7 +45,9 @@ Ring<T>::Ring() {
 }
 
 template<typename T>
-Ring<T>::~Ring() { delete []m_buf; }
+Ring<T>::~Ring() {
+	delete[] m_buf;
+}
 
 template<typename T>
 Perhaps<T> Ring<T>::read() {
