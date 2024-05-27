@@ -47,7 +47,11 @@ struct Token {
 	};
 
 	Type type;
-	std::string sym;
+	std::string sym {""};
+
+	Token() {}
+	Token(Type type) : type(type) {}
+	Token(Type type, const string& sym) : type(type), sym(sym) {}
 
 	bool operator==(Token other) {
 		return type == other.type && sym == other.sym;
@@ -191,9 +195,9 @@ struct AST {
 				new (&children) vector<Node>(node.children);
 		}
 		// Node() : type(Type::INVALID) {}
-		Node(Type type) : children(), type(type) {}
-		Node(Str str) : sym(str), type(Type::SYM) {}
-		Node(int num) : num(num), type(Type::INT) {}
+		Node(Type type) : type(type), children() {}
+		Node(Str str) : type(Type::SYM), sym(str) {}
+		Node(int num) : type(Type::INT), num(num) {}
 		~Node() {
 			if (type == Type::SYM)
 				sym.~Str();
