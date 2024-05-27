@@ -43,6 +43,7 @@ struct Token {
 		COMMA,
 		GRAVE,
 		SYM,
+		INT,
 	};
 
 	Type type;
@@ -91,6 +92,7 @@ std::ostream& operator<<(std::ostream& st, Token& tk) {
 		case Token::Type::COMMA: st << ','; break;
 		case Token::Type::GRAVE: st << '`'; break;
 		case Token::Type::QUOTE: st << '\''; break;
+		case Token::Type::INT: st << tk.sym; break;
 	}
 	return st;
 }
@@ -112,6 +114,18 @@ Perhaps<Token> Lexer::lex() {
 		case EOF: return {};
 		default: {
 			std::string sym = "";
+			if (isdigit(c)) {
+				sym += c;
+				// m_ring.read();
+				per = m_ring.peek();
+				while (per.is_some()) {
+					c = per.unwrap();
+					if (!isdigit(c)) return Token {Token::Type::INT, sym};
+					sym += c;
+					m_ring.read();
+					per = m_ring.peek();
+				}
+			}
 			if (!is_reserved(c)) sym += c;
 			Perhaps<char> per;
 			while (((per = m_ring.peek()), true) && per.is_some()
@@ -146,12 +160,14 @@ struct AST {
 			QUOTE,
 			QUASI,
 			UNQUOTE,
+			INT,
 		};
 		Type type;
 
 		union {
 			vector<Node> children;
 			Str sym;
+			int num;
 		};
 
 		friend std::ostream& operator<<(std::ostream& st, AST::Node& node);
@@ -160,6 +176,8 @@ struct AST {
 			type = other.type;
 			if (other.type == Type::SYM)
 				new (&sym) std::string(other.sym);
+			else if (type == Type::INT)
+				num = other.num;
 			else
 				new (&children) vector<Node>(other.children);
 			return *this;
@@ -167,20 +185,26 @@ struct AST {
 		Node(const Node& node) : type(node.type) {
 			if (node.type == Type::SYM)
 				new (&sym) std::string(node.sym);
+			else if (type == Type::INT)
+				num = node.num;
 			else
 				new (&children) vector<Node>(node.children);
 		}
 		// Node() : type(Type::INVALID) {}
 		Node(Type type) : children(), type(type) {}
 		Node(Str str) : sym(str), type(Type::SYM) {}
+		Node(int num) : num(num), type(Type::INT) {}
 		~Node() {
 			if (type == Type::SYM)
 				sym.~Str();
+			else if (type == Type::INT)
+				(void)0;
 			else
 				children.~vector<Node>();
 		}
 
 		Node& operator+=(const Node& other) {
+			assert(type != Type::SYM && type != Type::INT);
 			children.push_back(other);
 			return *this;
 		}
@@ -204,6 +228,7 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 		case AST::Node::Type::QUOTE: st << '\'' << node.children[0]; break;
 		case AST::Node::Type::QUASI: st << '`' << node.children[0]; break;
 		case AST::Node::Type::UNQUOTE: st << ',' << node.children[0]; break;
+		case AST::Node::Type::INT: st << node.num; break;
 	}
 	return st;
 }
@@ -227,6 +252,7 @@ struct Parser {
 	Perhaps<AST::Node> parse_quote();
 	Perhaps<AST::Node> parse_quasi();
 	Perhaps<AST::Node> parse_unquote();
+	Perhaps<AST::Node> parse_int();
 
 	void ensure();
 	bool match(Token::Type);
@@ -324,7 +350,18 @@ Perhaps<AST::Node> Parser::parse_list() {
 	return list;
 }
 
-// exp = list | symbol | quote | quasi | unquote
+// int = INT
+Perhaps<AST::Node> Parser::parse_int() {
+	auto per_num = peek();
+	if (per_num.is_none()) return {};
+	auto num = per_num.unwrap();
+	if (num.type != Token::Type::INT) return {};
+	advance();
+	int res = std::stoi(num.sym);
+	return AST::Node(res);
+}
+
+// exp = list | symbol | quote | quasi | unquote | int
 Perhaps<AST::Node> Parser::parse_exp() {
 	auto list = parse_list();
 	if (list.is_some()) return list;
