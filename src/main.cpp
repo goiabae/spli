@@ -22,9 +22,14 @@ struct File {
 	File(const char* path, const char* mode) : m_fd {fopen(path, mode)} {}
 	File(FILE* fd) : m_owned {false}, m_fd {fd} {}
 
-	File(const File& other) = default;
+	File(const File& other) : m_owned(false), m_fd(other.m_fd) {}
 	File(File&& other) = default;
-	File& operator=(const File& other) = default;
+	File& operator=(const File& other) {
+		if (this == &other) return *this;
+		m_owned = false;
+		m_fd = other.m_fd;
+		return *this;
+	}
 	File& operator=(File&& other) = default;
 	~File() {
 		if (m_owned) (void)fclose(m_fd); // FIXME: handle fclose return value
@@ -128,8 +133,6 @@ Perhaps<Token> Lexer::lex() {
 		case '`': return Token {Token::Type::GRAVE};
 		case '\'': return Token {Token::Type::QUOTE};
 		case ',': return Token {Token::Type::COMMA};
-		case '\t':
-		case '\n':
 		case '"': {
 			std::string str;
 			per = m_ring.peek();
@@ -145,6 +148,8 @@ Perhaps<Token> Lexer::lex() {
 			}
 			return {};
 		}
+		case '\t':
+		case '\n':
 		case ' ': return lex();
 		case '0':
 		case '1':
@@ -278,7 +283,9 @@ struct AST {
 		}
 	};
 
-	Perhaps<Node> root;
+	AST(Node _root) : root(std::move(_root)) {}
+
+	Node root;
 	friend std::ostream& operator<<(std::ostream& st, AST& ast);
 };
 
@@ -304,16 +311,12 @@ std::ostream& operator<<(std::ostream& st, AST::Node& node) {
 	return st;
 }
 
-std::ostream& operator<<(std::ostream& st, AST& ast) {
-	if (ast.root.is_none()) return st;
-	AST::Node node = ast.root.unwrap();
-	return st << node;
-}
+std::ostream& operator<<(std::ostream& st, AST& ast) { return st << ast.root; }
 
 struct Parser {
 	Lexer lexer;
 	Parser(File& file) : lexer(file) {}
-	AST parse();
+	Perhaps<AST> parse();
 
  private:
 	Perhaps<AST::Node> parse_program();
@@ -368,9 +371,10 @@ Perhaps<AST::Node> operator||(
 	return std::move(rhs);
 }
 
-AST Parser::parse() {
-	AST ast;
-	ast.root = parse_program();
+Perhaps<AST> Parser::parse() {
+	Perhaps<AST::Node> per = parse_program();
+	if (per.is_none()) return {};
+	AST ast(per.unwrap());
 	return ast;
 }
 
@@ -466,7 +470,9 @@ int main(int argc, char* argv[]) {
 
 	File file = (argv[1][0] == '-') ? stdin : File(argv[1], "r");
 	Parser parser(file);
-	AST ast = parser.parse();
+	Perhaps<AST> per_ast = parser.parse();
+	if (per_ast.is_none()) return 1;
+	AST ast = per_ast.unwrap();
 	cout << ast << '\n';
 	return 0;
 }

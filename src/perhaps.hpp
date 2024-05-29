@@ -3,8 +3,8 @@
 #ifndef PERHAPS_HPP
 #define PERHAPS_HPP
 
-#include <assert.h>
-#include <stddef.h>
+#include <cassert>
+#include <cstddef>
 
 template<typename T>
 struct Perhaps {
@@ -16,11 +16,11 @@ struct Perhaps {
 	Perhaps(T&& t);
 
 	Perhaps(const Perhaps<T>& other);
-	Perhaps(Perhaps<T>&& other);
+	Perhaps(Perhaps<T>&& other) noexcept;
 	~Perhaps();
 
 	Perhaps<T>& operator=(const Perhaps<T>& other);
-	Perhaps<T>& operator=(Perhaps<T>&& other);
+	Perhaps<T>& operator=(Perhaps<T>&& other) noexcept;
 
 	bool operator==(Perhaps<T>& other);
 
@@ -51,18 +51,16 @@ Perhaps<T>::Perhaps(T& t) : m_some(true) {
 
 template<typename T>
 Perhaps<T>::Perhaps(T&& t) : m_some(true) {
-	new (&m_value) T(t);
+	new (&m_value) T(std::move(t));
 }
 
 template<typename T>
-Perhaps<T>::Perhaps(const Perhaps<T>& other) {
-	m_some = other.m_some;
+Perhaps<T>::Perhaps(const Perhaps<T>& other) : m_some(other.m_some) {
 	if (other.m_some) new (&m_value) T(other.m_value);
 }
 
 template<typename T>
-Perhaps<T>::Perhaps(Perhaps<T>&& other) {
-	m_some = other.m_some;
+Perhaps<T>::Perhaps(Perhaps<T>&& other) noexcept : m_some(other.m_some) {
 	if (other.m_some) new (&m_value) T(other.m_value);
 }
 
@@ -72,7 +70,7 @@ Perhaps<T>::~Perhaps() {
 }
 
 template<typename T>
-Perhaps<T>& Perhaps<T>::operator=(Perhaps<T>&& other) {
+Perhaps<T>& Perhaps<T>::operator=(Perhaps<T>&& other) noexcept {
 	m_some = other.m_some;
 	if (other.m_some) new (&m_value) T(other.m_value);
 	return *this;
@@ -80,6 +78,7 @@ Perhaps<T>& Perhaps<T>::operator=(Perhaps<T>&& other) {
 
 template<typename T>
 Perhaps<T>& Perhaps<T>::operator=(const Perhaps<T>& other) {
+	if (this == &other) return *this;
 	m_some = other.m_some;
 	if (other.m_some) new (&m_value) T(other.m_value);
 	return *this;
